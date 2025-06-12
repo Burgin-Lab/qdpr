@@ -1,0 +1,555 @@
+import os
+import pickle
+import numpy as np
+import tensorflow as tf
+from tensorflow import keras
+
+def get_datasets(dataset, settings):
+    dataset_dict = pickle.load(open(dataset, 'rb'))
+
+    train = tf.data.Dataset.from_tensor_slices((dataset_dict['examples'][:int(len(dataset_dict['labels']) * settings.train_split)],
+                                                dataset_dict['labels'][:int(len(dataset_dict['labels']) * settings.train_split), 0]))
+    if settings.train_split < 1:
+        test = tf.data.Dataset.from_tensor_slices((dataset_dict['examples'][int(len(dataset_dict['labels']) * settings.train_split):],
+                                                   dataset_dict['labels'][int(len(dataset_dict['labels']) * settings.train_split):, 0]))
+    else:
+        test = None
+
+    return train, test
+
+
+def run_experiment(model, loss, train_dataset, test, settings):
+    model.compile(
+        optimizer=keras.optimizers.Adam(learning_rate=settings.learning_rate),
+        loss=loss,
+        metrics=[keras.metrics.MeanSquaredError()],
+    )
+
+    if settings.early_stopping > 0 and settings.train_split < 1:
+        callback = keras.callbacks.EarlyStopping(monitor='val_loss', patience=settings.early_stopping, restore_best_weights=True)
+        history = model.fit(train_dataset, validation_data=test, epochs=999999999, callbacks=[callback])
+    else:
+        history = model.fit(train_dataset, epochs=settings.num_epochs)
+
+    _, rmse = model.evaluate(train_dataset, verbose=0)
+    print(f"Train RMSE: {round(rmse, 3)}")
+
+    return history
+
+
+def create_model(pre_models, settings):
+    aaindex1_pca = np.array([[2.29078493e-01, 2.54611491e-01, 2.04648338e-01,
+                              2.09227340e-01, 1.75280541e-01, 2.03621120e-01,
+                              2.26707438e-01, 2.08974461e-01, 1.97554644e-01,
+                              2.35188339e-01, 2.64096366e-01, 2.64399638e-01,
+                              1.96662061e-01, 2.37592638e-01, 1.81435292e-01,
+                              2.13378182e-01, 2.21658031e-01, 2.29881856e-01,
+                              2.46410543e-01, 2.43968841e-01],
+                             [-6.65444194e-02, -2.22599437e-01, -2.24306411e-01,
+                              -1.07836756e-01, 3.77374449e-01, -2.22774547e-01,
+                              -2.08630679e-01, -2.07240688e-01, -1.31748472e-02,
+                              2.16127116e-01, 1.71911474e-01, -2.88672249e-01,
+                              2.57313411e-01, 3.27410777e-01, -2.06941781e-01,
+                              -2.10466442e-01, -3.59038823e-02, 3.75676060e-01,
+                              9.74341822e-02, 1.82619796e-01],
+                             [4.07034340e-01, -3.16385016e-01, -7.52802865e-02,
+                              -2.28280071e-02, 1.18487423e-01, -2.37481078e-01,
+                              -1.16252129e-01, 4.30555776e-01, -2.92893305e-01,
+                              8.46227071e-02, 2.29146139e-01, -9.11701558e-02,
+                              -1.60230909e-01, -3.67634185e-02, -3.24996528e-02,
+                              2.15650020e-01, 1.28452548e-01, -3.10309594e-01,
+                              -2.06249571e-01, 2.73899404e-01],
+                             [-1.05787434e-01, -5.47448844e-02, -1.48290242e-01,
+                              4.50861306e-01, 4.18981442e-01, -2.23470677e-02,
+                              2.70496370e-01, -1.85184274e-01, -2.67750575e-01,
+                              -1.57419723e-01, -1.47741265e-01, 3.57752677e-01,
+                              -1.14510079e-01, -7.50913106e-02, -3.18245699e-01,
+                              -7.62712886e-02, 2.84243726e-01, 1.40412564e-02,
+                              -1.54104105e-01, 1.28583480e-02],
+                             [8.13482965e-03, -1.72202431e-01, 1.01729375e-01,
+                              3.50466262e-01, 2.96863195e-01, 1.67605421e-02,
+                              6.47033780e-02, 1.38306385e-01, 3.07273328e-01,
+                              -1.01228768e-01, -3.37464110e-01, -5.39448859e-01,
+                              2.05100774e-01, -1.31369110e-01, 3.16271967e-01,
+                              6.04630512e-02, 1.40325050e-01, -2.18511580e-02,
+                              -1.47489538e-01, -1.04402597e-01],
+                             [-9.14893400e-02, 4.20768735e-01, -3.65222591e-01,
+                              -7.70952182e-02, 2.13644687e-01, -1.40477594e-01,
+                              -1.10099957e-01, 4.35166699e-01, 1.18902280e-01,
+                              -2.79778137e-01, 1.64229931e-02, 4.46904010e-02,
+                              -3.33811075e-01, 1.25981048e-01, 2.18919558e-01,
+                              -1.88807943e-01, -6.45061785e-02, 2.55983011e-01,
+                              -1.78960563e-01, -3.33329960e-02],
+                             [-1.22394143e-01, -5.11099335e-01, -1.05253519e-01,
+                              1.99440813e-01, -1.65179183e-01, -3.35898323e-02,
+                              7.32075756e-02, 1.58079730e-01, -2.88687559e-01,
+                              -8.65060889e-02, 1.22149748e-01, 1.83843692e-01,
+                              -8.66998456e-04, 2.33019558e-02, 4.88525155e-01,
+                              -2.09708184e-01, -5.14654228e-02, 2.00401993e-01,
+                              3.36108407e-01, -1.88896123e-01],
+                             [-1.14558797e-01, -1.54801346e-01, 6.14012613e-02,
+                              -3.61513861e-01, 4.28655934e-01, 1.02305878e-01,
+                              -2.62661594e-01, -1.92629635e-01, 9.24547723e-02,
+                              1.55181802e-01, -7.02788000e-02, 4.38760608e-01,
+                              9.61821249e-02, -6.92489287e-02, 4.26765534e-01,
+                              4.49379662e-02, 1.80895094e-03, -1.90252570e-01,
+                              -2.51860652e-01, -1.52883057e-02],
+                             [4.19321850e-02, -2.35518463e-01, -4.23065889e-03,
+                              -1.34510167e-02, -2.56120994e-02, -2.12087516e-01,
+                              -9.51836691e-02, 4.19436977e-01, 4.43058340e-01,
+                              -7.77080857e-02, -1.80293877e-01, 3.83119107e-01,
+                              3.27920580e-01, -1.17819095e-01, -3.92896596e-01,
+                              -1.20855291e-01, -1.27029573e-01, -2.89979977e-02,
+                              1.21948702e-01, -8.99348588e-02],
+                             [2.80840862e-01, -1.09726984e-01, -1.03845610e-01,
+                              7.69690880e-02, -4.45274520e-01, -1.37128202e-01,
+                              -6.84651134e-02, -1.89321690e-01, 7.12757122e-02,
+                              -3.76675951e-02, -1.56834491e-01, 1.70688718e-01,
+                              1.43107794e-01, 1.38176925e-01, 1.11209272e-01,
+                              1.05980301e-01, 1.70942237e-01, 4.21899269e-01,
+                              -5.47063972e-01, 6.98176183e-02],
+                             [1.28508596e-01, 9.32440077e-02, -1.55777718e-01,
+                              3.49363782e-01, -7.15741382e-02, -3.28108496e-01,
+                              5.70451320e-02, -3.29011767e-01, 3.59972166e-01,
+                              7.78235742e-03, 3.74985524e-01, 5.39933138e-02,
+                              -1.66011112e-02, -1.07120121e-01, 1.96831442e-01,
+                              -2.95868174e-01, -1.89357932e-01, -3.55580908e-01,
+                              -3.11735010e-02, 1.72399424e-01],
+                             [-1.10398948e-01, 1.06842037e-01, -9.82536104e-02,
+                              2.06046303e-01, -2.66998942e-02, 2.74631284e-01,
+                              9.78146736e-02, 2.47352748e-01, -2.13354118e-01,
+                              5.05815453e-01, 7.12668331e-02, -1.67485826e-02,
+                              2.26162985e-01, -2.19053109e-01, -4.53647488e-02,
+                              -1.94224315e-01, -4.15291656e-01, 6.60942407e-02,
+                              -3.91127597e-01, -4.40629445e-02],
+                             [1.57782981e-01, 3.27809034e-01, -1.11837541e-01,
+                              2.42453054e-01, 1.32246054e-02, -1.92177954e-01,
+                              -5.74001687e-01, -7.29470784e-02, -2.29745826e-01,
+                              1.37270982e-01, -1.31488160e-01, 4.54888302e-02,
+                              1.43679701e-01, -4.01920665e-01, 6.65482661e-02,
+                              1.50428087e-01, 1.04869552e-01, 1.07819153e-01,
+                              2.97707435e-01, -1.13884479e-01],
+                             [4.36720359e-01, -1.25655857e-01, 2.24334000e-01,
+                              7.99320062e-02, 2.63013695e-01, 1.46345509e-01,
+                              -4.87076284e-02, -1.58331715e-01, 1.82489752e-02,
+                              -2.78568556e-01, 9.08507778e-02, 3.03376679e-02,
+                              -2.06267725e-01, -1.07651855e-01, -7.06015868e-02,
+                              1.65101952e-01, -5.88526165e-01, 2.95453296e-01,
+                              -1.32242151e-04, -1.07677926e-01],
+                             [-1.54927156e-01, 1.57061236e-01, 5.61052746e-01,
+                              -1.65091182e-01, 4.39495432e-02, -4.28454785e-01,
+                              1.64198827e-01, 5.75684016e-02, -2.48125011e-01,
+                              -2.19887681e-01, 9.01132742e-02, -8.69798939e-03,
+                              2.29249504e-01, -2.74417332e-01, 8.23584512e-02,
+                              -1.88205977e-01, -9.30456582e-03, 1.81362197e-01,
+                              -1.16503914e-01, 2.42454854e-01],
+                             [-1.33300582e-01, -1.27560576e-01, -3.99261403e-02,
+                              -9.09349314e-02, -8.13767903e-03, 1.96504652e-01,
+                              -7.31444650e-02, 9.60954567e-04, 2.21992937e-01,
+                              -8.53029404e-02, 6.00915132e-01, -7.73426205e-02,
+                              -4.09354702e-02, -4.47717586e-01, -1.37299131e-01,
+                              4.22302557e-02, 3.68091838e-01, 2.17829917e-01,
+                              -1.36314041e-01, -2.53262984e-01],
+                             [-2.05743992e-01, -8.74145496e-02, 4.09734248e-01,
+                              3.36362847e-01, -1.00695789e-01, 2.66422049e-01,
+                              -5.61856757e-01, 8.44358863e-02, 4.77253273e-02,
+                              -6.93043237e-02, 2.96965463e-02, 2.64355492e-02,
+                              -2.20453577e-01, 2.02493710e-01, -8.87964742e-02,
+                              -2.69312762e-01, 6.45290057e-02, -2.95637034e-02,
+                              -9.66783726e-02, 2.68345507e-01],
+                             [2.25716532e-01, -5.47136605e-02, -2.63242221e-01,
+                              -1.96961758e-01, -3.76691417e-02, 4.02553090e-01,
+                              5.69344795e-02, -2.91675703e-02, 1.03535319e-02,
+                              -1.70549307e-01, -1.99522356e-01, -3.75063670e-02,
+                              5.26246200e-02, -3.68672093e-01, 4.89590135e-02,
+                              -3.14433009e-01, 7.36127950e-02, 7.17342304e-02,
+                              1.61023288e-01, 5.68815398e-01],
+                             [6.62967192e-02, 1.43016911e-01, -1.35814547e-01,
+                              3.29055327e-02, 1.02665603e-02, 2.41306849e-01,
+                              -1.32103325e-01, 1.41903024e-02, -2.33930678e-01,
+                              -5.25268410e-01, 2.27747180e-01, -1.36073806e-02,
+                              5.86170641e-01, 2.48090925e-01, -2.65776439e-03,
+                              1.84567380e-02, -3.71008709e-02, -2.61665158e-01,
+                              -9.40826942e-02, -1.12967093e-01],
+                             [1.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00],
+                             [0.00000000e+00, 1.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00],
+                             [0.00000000e+00, 0.00000000e+00, 1.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00],
+                             [0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              1.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00],
+                             [0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 1.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00],
+                             [0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 1.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00],
+                             [0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              1.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00],
+                             [0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 1.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00],
+                             [0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 1.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00],
+                             [0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              1.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00],
+                             [0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 1.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00],
+                             [0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 1.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00],
+                             [0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              1.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00],
+                             [0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 1.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00],
+                             [0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 1.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00],
+                             [0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              1.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00],
+                             [0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 1.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00],
+                             [0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 1.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00],
+                             [0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              1.00000000e+00, 0.00000000e+00],
+                             [0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                              0.00000000e+00, 1.00000000e+00]])
+
+    if settings.model_architecture == 'multibackbone_dynamic_embedding':
+        name = 0
+        input = tf.keras.layers.Input(shape=(len(settings.wt_seq)))
+        embedding_models = []
+        for bb_type in ['ks', 'wn', 'sr', 'rmsf']:  # todo: make this dynamic
+            byres_pre_models = [keras.saving.load_model(model) for model in
+                                sorted(pre_models, key=lambda x: int(os.path.basename(x).replace('.keras', '').split('_')[-1]))
+                                if bb_type in model]
+
+            for model in byres_pre_models:
+                model._name = model.name + '_' + str(name)
+                name += 1
+                for layer in model.layers:
+                    layer._name = layer.name + str(name)
+                    layer.trainable = False
+                    name += 1
+
+            embedding_models.append(tf.keras.layers.Concatenate()([pre_model(input) for pre_model in byres_pre_models]))
+
+        embedding_models = tf.keras.layers.Concatenate()(embedding_models)
+        embedding_models = tf.reshape(embedding_models, [-1, len(settings.wt_seq), 4])  # todo: update 4 to reflect dynamic length of bb_types
+
+        static_embedding = tf.keras.layers.Embedding(20, 39, weights=[aaindex1_pca.transpose()], trainable=False, input_length=len(settings.wt_seq))(input)
+        dynamic_embedding = tf.keras.layers.Concatenate(-1)([static_embedding, embedding_models])
+
+        exp_backbone = tf.keras.Sequential([
+            tf.keras.layers.Conv1D(128, 17, 1, activation=tf.keras.layers.LeakyReLU()),
+            tf.keras.layers.Conv1D(128, 17, 1, activation=tf.keras.layers.LeakyReLU()),
+            tf.keras.layers.Conv1D(128, 17, 1, activation=tf.keras.layers.LeakyReLU()),
+            tf.keras.layers.Flatten(),
+            tf.keras.layers.Dense(100, activation=tf.keras.layers.LeakyReLU()),
+            tf.keras.layers.Dropout(0.2),
+            tf.keras.layers.Dense(1, activation='linear')
+        ])(dynamic_embedding)
+
+        backbones = [keras.saving.load_model(model) for model in sorted(pre_models,
+                         key=lambda x: int(os.path.basename(x).replace('.keras','').split('_')[-1]))
+                         if 'pca' in model]     # todo: make this dynamic
+
+        for model in backbones:
+            model._name = model.name + '_' + str(name)
+            name += 1
+            for layer in model.layers:
+                layer._name = layer.name + str(name)
+                layer.trainable = False
+                name += 1
+
+        backbones = tf.keras.layers.Concatenate()([backbone(input) for backbone in backbones])
+
+        c = tf.keras.layers.Concatenate()([exp_backbone, backbones])
+        c = tf.keras.layers.Dense(100, activation=tf.keras.layers.LeakyReLU())(c)
+        c = tf.keras.layers.Dropout(0.2)(c)
+        c = tf.keras.layers.Dense(1, activation='linear')(c)
+
+        model = tf.keras.Model(inputs=input, outputs=c)
+    elif settings.model_architecture == 'avgfp_multibackbone_dynamic_embedding':
+        name = 0
+        input = tf.keras.layers.Input(shape=(len(settings.wt_seq)))
+        embedding_models = []
+        for bb_type in ['ks', 'wn', 'rmsf']:  # todo: make this dynamic
+            byres_pre_models = [keras.saving.load_model(model) for model in
+                                sorted(pre_models, key=lambda x: int(os.path.basename(x).replace('.keras', '').split('_')[-1]))
+                                if bb_type in model]
+
+            for model in byres_pre_models:
+                model._name = model.name + '_' + str(name)
+                name += 1
+                for layer in model.layers:
+                    layer._name = layer.name + str(name)
+                    layer.trainable = False
+                    name += 1
+
+            if bb_type == 'wn':     # kludge for missing wn value for chromophore
+                class ConstantLayer(tf.keras.layers.Layer):
+                    def __init__(self, units=32):
+                        super().__init__()
+                        self.units = units
+
+                    # Create the state of the layer (weights)
+                    def build(self, input_shape):
+                        self.kernel = self.add_weight(
+                            shape=(input_shape[-1], self.units),
+                            initializer="glorot_uniform",
+                            trainable=True,
+                            name="kernel",
+                        )
+                        self.bias = self.add_weight(
+                            shape=(self.units,),
+                            initializer="zeros",
+                            trainable=True,
+                            name="bias",
+                        )
+
+                    # Defines the computation
+                    def call(self, inputs):
+                        output_shape = tf.shape(inputs)[0]
+                        return tf.zeros((output_shape, 1), dtype=inputs.dtype)
+                #byres_pre_models = byres_pre_models[:62] + [tf.keras.layers.Lambda(lambda x: x[:,0])] + byres_pre_models[62:]   # todo: for some reason lambda is returning (None,) and I need (None, 1)
+                byres_pre_models = byres_pre_models[:62] + [ConstantLayer()] + byres_pre_models[62:]
+
+            embedding_models.append(tf.keras.layers.Concatenate()([pre_model(input) for pre_model in byres_pre_models]))
+
+        embedding_models = tf.keras.layers.Concatenate()(embedding_models)
+        embedding_models = tf.reshape(embedding_models, [-1, len(settings.wt_seq), 3])  # todo: update 3 to reflect dynamic length of bb_types
+
+        static_embedding = tf.keras.layers.Embedding(20, 39, weights=[aaindex1_pca.transpose()], trainable=False, input_length=len(settings.wt_seq))(input)
+        dynamic_embedding = tf.keras.layers.Concatenate(-1)([static_embedding, embedding_models])
+
+        exp_backbone = tf.keras.Sequential([
+                tf.keras.layers.Conv1D(128, 3, 1, activation=tf.keras.layers.LeakyReLU()),
+                tf.keras.layers.Conv1D(128, 3, 1, activation=tf.keras.layers.LeakyReLU()),
+                tf.keras.layers.Conv1D(128, 3, 1, activation=tf.keras.layers.LeakyReLU()),
+                tf.keras.layers.Conv1D(128, 3, 1, activation=tf.keras.layers.LeakyReLU()),
+                tf.keras.layers.Conv1D(128, 3, 1, activation=tf.keras.layers.LeakyReLU()),
+                tf.keras.layers.Flatten(),
+                tf.keras.layers.Dense(100, activation=tf.keras.layers.LeakyReLU()),
+                tf.keras.layers.Dropout(0.2),
+                tf.keras.layers.Dense(1, activation='linear')
+            ])(dynamic_embedding)
+
+        backbones = [keras.saving.load_model(model) for model in sorted(pre_models,
+                         key=lambda x: int(os.path.basename(x).replace('.keras','').split('_')[-1]))
+                         if 'pca' in model]     # todo: make this dynamic
+
+        for model in backbones:
+            model._name = model.name + '_' + str(name)
+            name += 1
+            for layer in model.layers:
+                layer._name = layer.name + str(name)
+                layer.trainable = False
+                name += 1
+
+        backbones = tf.keras.layers.Concatenate()([backbone(input) for backbone in backbones])
+
+        c = tf.keras.layers.Concatenate()([exp_backbone, backbones])
+        c = tf.keras.layers.Dense(100, activation=tf.keras.layers.LeakyReLU())(c)
+        c = tf.keras.layers.Dropout(0.2)(c)
+        c = tf.keras.layers.Dense(1, activation='linear')(c)
+
+        model = tf.keras.Model(inputs=input, outputs=c)
+    elif settings.model_architecture == 'avgfp':
+        if not settings.transfer_weights:
+            model = tf.keras.Sequential([
+                tf.keras.layers.Embedding(20, 39, weights=[aaindex1_pca.transpose()], trainable=False, input_length=len(settings.wt_seq)),
+                tf.keras.layers.Conv1D(128, 3, 1, activation=tf.keras.layers.LeakyReLU(), trainable=(not settings.transfer_weights)),
+                tf.keras.layers.Conv1D(128, 3, 1, activation=tf.keras.layers.LeakyReLU(), trainable=(not settings.transfer_weights)),
+                tf.keras.layers.Conv1D(128, 3, 1, activation=tf.keras.layers.LeakyReLU(), trainable=(not settings.transfer_weights)),
+                tf.keras.layers.Conv1D(128, 3, 1, activation=tf.keras.layers.LeakyReLU(), trainable=(not settings.transfer_weights)),
+                tf.keras.layers.Conv1D(128, 3, 1, activation=tf.keras.layers.LeakyReLU(), trainable=(not settings.transfer_weights)),
+                tf.keras.layers.Flatten(),
+                tf.keras.layers.Dense(100, activation=tf.keras.layers.LeakyReLU()),
+                tf.keras.layers.Dropout(0.2),
+                tf.keras.layers.Dense(1, activation='linear')
+            ])
+        else:
+            model = tf.keras.Sequential([
+                tf.keras.layers.Embedding(20, 39, weights=[aaindex1_pca.transpose()], trainable=False, input_length=len(settings.wt_seq)),
+                tf.keras.layers.Conv1D(128, 3, 1, activation=tf.keras.layers.LeakyReLU(), trainable=False),
+                tf.keras.layers.Conv1D(128, 3, 1, activation=tf.keras.layers.LeakyReLU(), trainable=False),
+                tf.keras.layers.Conv1D(128, 3, 1, activation=tf.keras.layers.LeakyReLU(), trainable=False),
+                tf.keras.layers.Conv1D(128, 3, 1, activation=tf.keras.layers.LeakyReLU(), trainable=False),
+                tf.keras.layers.Conv1D(128, 3, 1, activation=tf.keras.layers.LeakyReLU(), trainable=False),
+                tf.keras.layers.Flatten(),
+                tf.keras.layers.Dense(256, activation=tf.keras.layers.LeakyReLU(), trainable=True),
+                tf.keras.layers.Dropout(0.2),
+                tf.keras.layers.Dense(228, activation='linear')
+            ])
+
+            model.load_weights(settings.transfer_weights)
+            model.pop()
+            model.pop()
+            model.pop()
+            model.add(tf.keras.layers.Dense(100, activation='linear'))
+            model.add(tf.keras.layers.Dropout(0.2))
+            model.add(tf.keras.layers.Dense(1, activation='linear'))
+    elif settings.model_architecture == 'gb1':
+        if not settings.transfer_weights:
+            model = tf.keras.Sequential([
+                tf.keras.layers.Embedding(20, 39, weights=[aaindex1_pca.transpose()], trainable=False, input_length=len(settings.wt_seq)),
+                tf.keras.layers.Conv1D(128, 17, 1, activation=tf.keras.layers.LeakyReLU()),
+                tf.keras.layers.Conv1D(128, 17, 1, activation=tf.keras.layers.LeakyReLU()),
+                tf.keras.layers.Conv1D(128, 17, 1, activation=tf.keras.layers.LeakyReLU()),
+                tf.keras.layers.Flatten(),
+                tf.keras.layers.Dense(100, activation=tf.keras.layers.LeakyReLU()),
+                tf.keras.layers.Dropout(0.2),
+                tf.keras.layers.Dense(1, activation='linear')
+            ])
+        else:
+            model = tf.keras.Sequential([
+                tf.keras.layers.Embedding(20, 39, weights=[aaindex1_pca.transpose()], trainable=False, input_length=len(settings.wt_seq)),
+                tf.keras.layers.Conv1D(128, 17, 1, activation=tf.keras.layers.LeakyReLU(), trainable=False),
+                tf.keras.layers.Conv1D(128, 17, 1, activation=tf.keras.layers.LeakyReLU(), trainable=False),
+                tf.keras.layers.Conv1D(128, 17, 1, activation=tf.keras.layers.LeakyReLU(), trainable=False),
+                tf.keras.layers.Flatten(),
+                tf.keras.layers.Dense(128, activation=tf.keras.layers.LeakyReLU()),
+                tf.keras.layers.Dropout(0.3),
+                tf.keras.layers.Dense(128, activation=tf.keras.layers.LeakyReLU()),
+                tf.keras.layers.Dropout(0.1),
+                tf.keras.layers.Dense(56, activation='linear')
+            ])
+
+            model.load_weights(settings.transfer_weights)
+            model.pop()
+            model.pop()
+            model.pop()
+            model.pop()
+            model.pop()
+            model.add(tf.keras.layers.Dense(100, activation='linear'))
+            model.add(tf.keras.layers.Dropout(0.2))
+            model.add(tf.keras.layers.Dense(1, activation='linear'))
+    else:
+        raise RuntimeError('Unrecognized model_architecture: ' + settings.model_architecture)
+
+    model.summary()
+
+    return model
+
+
+def train(dataset, step, pre_models, settings):
+    training_index = 0
+    while training_index < max(1, settings.repeat_trainings):
+        train_dataset, test_dataset = get_datasets(dataset, settings)
+
+        BATCH_SIZE = settings.batch_size
+
+        model = create_model(pre_models, settings)
+
+        #if settings.transfer_weights:
+        #    model.load_weights(settings.transfer_weights)
+
+        SHUFFLE_BUFFER_SIZE = 100
+        train_dataset = train_dataset.shuffle(SHUFFLE_BUFFER_SIZE).batch(BATCH_SIZE)
+        if test_dataset:
+            test_dataset = test_dataset.shuffle(SHUFFLE_BUFFER_SIZE).batch(BATCH_SIZE)
+
+        history = run_experiment(model, keras.losses.MeanSquaredError(), train_dataset, test_dataset, settings)
+
+        training_index += 1
+
+    model.save('experimental_' + str(step) + '.keras')
+    return 'experimental_' + str(step) + '.keras'
