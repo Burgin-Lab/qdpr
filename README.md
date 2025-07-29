@@ -17,7 +17,7 @@ Add the location of the downloaded repo to your python path. Invoke `qdpr.py` as
 python /path/to/qdpr.py configuration.config
 ```
 
-Where `configuration.config` is the configuration file for the job you want to run. Configuration files that reproduce the work in the aforementioned publication are provided in the qdpr/data folder.
+Where `configuration.config` is the configuration file for the job you want to run. Configuration files that reproduce the work in the aforementioned publication are provided in the `qdpr/data` folder. Documentation of the available options in the configuration file is available in `configuration.txt`.
 
 ### Copyright
 

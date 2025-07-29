@@ -1,0 +1,41 @@
+# These are all of the available options for configuration files, along with their typings, default values, and comments on what they are for.
+
+# Global settings
+working_directory: str = './working_directory'	# Sets the working directory for running the job. Will be created if it does not exist.
+output_filename: str = 'run_experiment.out'	# Name of the output file containing the scores of the selected sequences in each round.
+overwrite: bool = False				# If True, overwrite the working_directory if it already exists.
+
+# Engineering campaign settings
+campaign: str   		# The only supported option here is 'from_file' (to select sequences from a datafile)
+n_steps: int = 1		# Number of rounds of selection to perform.
+step_size: int = 32		# Number of sequences to select in each round.
+sequences_file: str     	# Path to file containing sequences for campaign == from_file
+predictions_file: str = './'   	# Path to .pkl file containing predictions from each model for each line in the sequences_file (will be created if it does not yet exist)
+prediction_type: str = 'correlation'    # options: correlation, correlation_squared, regression, learned. Model used to select sequences; correlation and correlation_squared use correlation coefficients; regression uses mean squared error of linear regression; learned uses simple 8-to-1 dense neural network.
+compare_prediction_types: list = []	# List of any of the above prediction_type values. For each one, produces a benchmark file for performance of each strategy at each step (selection is still only done using the selected prediction_type above).
+
+# ML model settings
+model_architecture: str = 'avgfp'	# To identify architecture of ML models (see manuscript for details)
+path_to_pretrained_models: str = ''	# Path to pre-trained .keras files (supports wildcard '*', and the suffix '.keras' is added automatically), one for each feature to include in QDPR.
+learning_rate: float = 0.001		# Model training learning rate
+repeat_trainings: int = 1		# Number of times to retrain each model (the one with the best validation performance is saved, the rest are discarded)
+num_epochs: int = 100			# Number of training epochs
+batch_size: int = 32			# Batch size during training
+train_split: float = 1			# Fraction of available training data used to train; the rest becomes the validation set, randomly selected.
+early_stopping: int = 0    		# If early_stopping > 0 and train_split < 1, use early stopping with this patience instead of num_epochs
+normalize_training_data: bool = False  	# if true, dataset labels are normalized (for training only, not for output)
+
+#ProSST settings
+prosst: int = 0     			# If > 0, use ProSST embeddings. Value should be vocabulary size: 20, 128, 512, 1024, 2048, or 4096
+prosst_pdb_file: str = ''  		# Path to .pdb file to pass to ProSST (should be mutually exclusive with prosst_structure_fasta)
+prosst_sequence_fasta: str = '' 	# Path to .fasta file to pass to ProSST
+prosst_structure_fasta: str = ''  	# Path to structure sequence .fasta file to pass to ProSST (should be mutually exclusive with prosst_pdb_file)
+path_to_prosst_model: str = ''		# Path to pre-built ProSST file dictionary with 'logits' and 'vocab' entries, saved as a pickle file.
+
+# Protein settings
+wt_seq: str				# Wild type sequence for this protein
+
+# Settings for initial dataset
+initial_dataset_type: str = 'file'  	# Strategy for selecting the initial sequences for round 0. options: file, random
+initial_dataset_file: str = ''      	# If above is 'file', path to file containing initial dataset (sequences and labels, formatted same as qdpr/data/avgfp_experimental.txt)
+rng_seed: int = -1			# RNG seed for selection of initial dataset if initial_dataset_type == 'random'
