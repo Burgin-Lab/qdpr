@@ -45,7 +45,6 @@ def evaluate_score(model_predictions, correlations, previous_seqs_indices, step,
         for ii in range(model_predictions.shape[1]):
             weight_lines = open(settings.pearsons_r_file, 'r').readlines()
             assert len(weight_lines) == len(correlations.keys()) - 1    # -1 for experimental
-            # weight_lines = [x for _, x in sorted(zip(list(correlations.keys())[1:], weight_lines), key=lambda x: x[0])]
             weight_lines_sorted = ['' for _ in range(len(weight_lines))]
             for line in weight_lines:
                 weight_lines_sorted[list(correlations.keys()).index(line.split()[0] + '.keras') - 1] = line
@@ -109,6 +108,7 @@ def evaluate_score(model_predictions, correlations, previous_seqs_indices, step,
         assert len(labels) == len(previous_seqs_indices)
         examples = np.transpose(model_predictions[:, previous_seqs_indices])
         dataset = {'examples': examples, 'labels': labels}
+        pickle.dump(dataset, open('learned_score_function_trainset_' + str(step) + '.pkl', 'wb'))
 
         if not os.path.exists('learned_score_function_' + str(step) + '.keras'):
             model = train_score_function.train(dataset, step, settings)
@@ -131,7 +131,6 @@ def evaluate_score(model_predictions, correlations, previous_seqs_indices, step,
 
 def from_file(models, correlations, seqfile, step, settings):
     # Evaluate candidate sequences in a file
-    # todo: would be smart to have a way to check here that correlations and models are in the same order
     candidates = [line.split()[0] for line in open(settings.sequences_file, 'r').readlines()]
     encoded_candidates = encode(candidates)
     model_predictions = np.zeros(shape=(len(models), len(candidates)))
@@ -142,6 +141,7 @@ def from_file(models, correlations, seqfile, step, settings):
     previous_seqs_indices = [candidates.index(seq) for seq in previous_seqs]
     assert len(previous_seqs) == len(set(previous_seqs))    # if not all unique, something has gone wrong
 
+    # Sloppy way to work out how to interpret contents of existing predictions file, if necessary
     if os.path.exists(settings.predictions_file + '/model_predictions.pkl') and settings.reuse_predictions:
         model_predictions = pickle.load(open(settings.predictions_file + '/model_predictions.pkl', 'rb'))
         try:
@@ -158,6 +158,11 @@ def from_file(models, correlations, seqfile, step, settings):
                       'is because skip_experimental_model was False when that file was created and continuing.')
                 #model_predictions = model_predictions
                 raise RuntimeError('Actually, that\'s not supported yet!')  # todo: implement
+            if model_predictions.shape[0] + 1 == len(models) and settings.prosst:
+                print('Warning: loaded predictions file ' + settings.predictions_file + '/model_predictions.pkl, but '
+                      'found it to contain two more predictions than this run has assigned models. Assuming that this '
+                      'is because prosst is set for this run and continuing.')
+                model_predictions = np.concatenate((model_predictions, np.zeros(shape=(1, len(candidates)))))
             else:
                 raise RuntimeError('Tried to load ' + settings.predictions_file + '/model_predictions.pkl, but found it'
                                    ' to contain a different number of predictions than this run has assigned models!')
@@ -173,31 +178,42 @@ def from_file(models, correlations, seqfile, step, settings):
             # Load model pickle file
             model = pickle.load(open(model, 'rb'))
 
+            if settings.model_architecture == 'avgfp' and len(settings.wt_seq) == 227:  # kludge to fix an avgfp-specific issue, remove in the future
+                offset = 1
+            else:
+                offset = 0
+
             # Convert mutated sequence to :-separated one-letter-code index one-letter-code format (e.g., D224G:S40G)
-            mutants = []
-            for seq in candidates:
-                this_muts = []
-                mutseq = seq
-                assert len(mutseq) == len(settings.wt_seq)
-                for jj in range(len(mutseq) - 1):   # todo: - 1 is a kludge to fix an avgfp-specific issue, remove in the future
-                    if not mutseq[jj] == settings.wt_seq[jj]:
-                        this_muts.append(settings.wt_seq[jj] + str(jj + 1) + mutseq[jj])
-                mutants.append(':'.join(this_muts))
+            if not os.path.exists('prosst_mutants.pkl'):
+                mutants = []
+                for seq in candidates:
+                    this_muts = []
+                    mutseq = seq
+                    assert len(mutseq) == len(settings.wt_seq)
+                    for jj in range(len(mutseq) - offset):
+                        if not mutseq[jj] == settings.wt_seq[jj]:
+                            this_muts.append(settings.wt_seq[jj] + str(jj + 1) + mutseq[jj])
+                    mutants.append(':'.join(this_muts))
+                pickle.dump(mutants, open('prosst_mutants.pkl', 'wb'))
+            else:
+                mutants = pickle.load(open('prosst_mutants.pkl', 'rb'))
 
             # Compute scores
+            logits = model['logits']
+            vocab = model['vocab']
             predictions = []
             for mutant in mutants:
                 mutant_score = 0
                 for sub_mutant in mutant.split(":"):
                     wt, idx, mt = sub_mutant[0], int(sub_mutant[1:-1]) - 1, sub_mutant[-1]
-                    pred = model['logits'][idx, model['vocab'][mt]] - model['logits'][idx, model['vocab'][wt]]
+                    pred = logits[0, idx, vocab[mt]] - logits[0, idx, vocab[wt]]
                     mutant_score += pred.item()
                 predictions.append(mutant_score)
 
             model_predictions[ii, :] = np.array(predictions)
             continue
 
-        loaded_model = keras.saving.load_model(model)
+        loaded_model = keras.saving.load_model(model, safe_mode=False)
 
         jj = 0
         while jj < len(candidates):
@@ -240,7 +256,7 @@ def from_file(models, correlations, seqfile, step, settings):
     output_seqs = []
 
     if settings.selection_method == 'top':
-        while len(output_seqs) < settings.step_size:    # todo: this is a bad way to do this, fix
+        while len(output_seqs) < settings.step_size:    # ugly approach to selecting top sequences based on max scores
             jj = scores.index(max(scores))
 
             # Add seq to output_seqs if and only if it's not already been selected in a previous round

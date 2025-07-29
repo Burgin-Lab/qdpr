@@ -49,9 +49,6 @@ def main(settings):
             if not settings.skip_experimental_model:
                 # Train experimental backbone on available data
                 exp_model = train_experimental.train(full_dataset, step, pre_models, settings)
-                # ### KLUDGE FOR TESTING -- REMOVE ###
-                # exp_model = '/jumbo/burginlab/tucker/gb1/3.ML/250101/pretrained_experimental.keras'
-                # ### KLUDGE FOR TESTING -- REMOVE ###
                 models = list(itertools.chain.from_iterable([[exp_model], pre_models]))
             else:
                 models = pre_models

@@ -38,8 +38,9 @@ def configure(config_file):
 
         #ProSST settings
         prosst: int = 0     # if > 0, should be vocabulary size: 20, 128, 512, 1024, 2048, or 4096
-        prosst_pdb_file: str = ''  # path to .pdb file to pass to ProSST
-        prosst_fasta_file: str = '' # path to .fasta file to pass to ProSST
+        prosst_pdb_file: str = ''  # path to .pdb file to pass to ProSST (should be mutually exclusive with prosst_structure_fasta)
+        prosst_sequence_fasta: str = '' # path to .fasta file to pass to ProSST
+        prosst_structure_fasta: str = ''  # path to structure sequence .fasta file to pass to ProSST (should be mutually exclusive with prosst_pdb_file)
         path_to_prosst_model: str = ''
 
         # Protein settings

@@ -66,9 +66,7 @@ def make_dataset(name, seqfile, settings):
     dataset = {'examples': examples, 'labels': labels}
 
     if settings.normalize_training_data:
-        # labels = np.array([(label - np.mean(labels)) / np.sqrt(np.var(labels)) for label in labels])
         norm_labels = [np.exp(label) for label in labels]
-        # norm_labels = np.array([(label - np.mean(labels)) / np.sqrt(np.var(labels)) for label in norm_labels])
         norm_labels = np.array([(label - min(labels)) / (max(labels) - min(labels)) for label in norm_labels])
 
         dataset = {'examples': examples, 'labels': norm_labels, 'raw_labels': labels}   # to support reporting raw labels in output file
@@ -89,9 +87,7 @@ def update_output(dataset_file, step_number, settings):
     open(settings.output_filename, 'a').write(str(step_number) + '\t' + labels + '\n')
 
 def get_models(settings):
-    # Load pre-trained models specified in settings.biophysics_models
-    # todo: if publishing this I'll probably want to supporting training these models in this program, too.
-    # todo: that probably needs to include some automated process of hyperparameter optimization?
+    # Load pre-trained models specified in settings.path_to_pretrained_models
     models = glob.glob(settings.path_to_pretrained_models + '*.keras')
     models.sort()
 
@@ -111,21 +107,47 @@ def get_models(settings):
 
             deprot = AutoModelForMaskedLM.from_pretrained("AI4Protein/ProSST-" + str(settings.prosst), trust_remote_code=True)
             tokenizer = AutoTokenizer.from_pretrained("AI4Protein/ProSST-" + str(settings.prosst), trust_remote_code=True)
-            processor = PdbQuantizer()
-            residue_sequence = str(SeqIO.read(settings.prosst_fasta_file, 'fasta').seq)
-            structure_sequence = processor(settings.prosst_pdb_file)
-            structure_sequence_offset = [i + 3 for i in structure_sequence]
-            tokenized_res = tokenizer([residue_sequence], return_tensors='pt')
-            input_ids = tokenized_res['input_ids']
-            attention_mask = tokenized_res['attention_mask']
-            structure_input_ids = torch.tensor([1, *structure_sequence_offset, 2], dtype=torch.long).unsqueeze(0)
-            with torch.no_grad():
-                outputs = deprot(
-                    input_ids=input_ids,
-                    attention_mask=attention_mask,
-                    ss_input_ids=structure_input_ids
+
+            def read_seq(fasta):
+                for record in SeqIO.parse(fasta, "fasta"):
+                    return str(record.seq)
+
+            def tokenize_structure_sequence(structure_sequence):
+                shift_structure_sequence = [i + 3 for i in structure_sequence]
+                shift_structure_sequence = [1, *shift_structure_sequence, 2]
+                return torch.tensor(
+                    [
+                        shift_structure_sequence,
+                    ],
+                    dtype=torch.long,
                 )
-            logits = torch.log_softmax(outputs.logits[:, 1:-1], dim=-1).squeeze()
+
+            sequence = read_seq(settings.prosst_sequence_fasta)
+            if settings.prosst_structure_fasta:
+                structure_sequence = read_seq(settings.prosst_structure_fasta)
+            elif settings.prosst_pdb_file:
+                processor = PdbQuantizer()
+                structure_sequence = processor(settings.prosst_pdb_file)
+            else:
+                raise RuntimeError('When using ProSST, either prosst_structure_fasta or prosst_pdb_file must be '
+                                   'provided in the configuration file.')
+
+            structure_sequence = [int(i) for i in structure_sequence.split(",")]
+            ss_input_ids = tokenize_structure_sequence(structure_sequence)
+            tokenized_results = tokenizer([sequence], return_tensors="pt")
+            input_ids = tokenized_results["input_ids"]
+            attention_mask = tokenized_results["attention_mask"]
+
+            outputs = deprot(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                ss_input_ids=ss_input_ids,
+                labels=input_ids,
+            )
+
+            logits = outputs.logits
+            logits = torch.log_softmax(logits[:, 1:-1, :], dim=-1)
+
             vocab = tokenizer.get_vocab()
 
             pickle.dump({'logits': logits, 'vocab': vocab}, open('prosst.pkl','wb'))
@@ -153,7 +175,7 @@ def generate_correlations(dataset, models, step, settings):
     def decode(encoded):
         # Decode sequence with mutations as a list of integers
 
-        ones = ['R', 'H', 'K', 'D', 'E', 'S', 'T', 'N', 'Q', 'C', 'G', 'P', 'A', 'V', 'I', 'L', 'M', 'F', 'Y', 'W'] 
+        ones = ['R', 'H', 'K', 'D', 'E', 'S', 'T', 'N', 'Q', 'C', 'G', 'P', 'A', 'V', 'I', 'L', 'M', 'F', 'Y', 'W']
 
         return ''.join([ones[ii] for ii in encoded])
 
@@ -232,7 +254,7 @@ def generate_correlations(dataset, models, step, settings):
                 return new_x, new_y
 
         if model == models[0] and settings.train_split < 1:  # do experimental model separately
-            keras_model = keras.saving.load_model(model, custom_objects={"ConstantLayer": ConstantLayer})
+            keras_model = keras.saving.load_model(model, custom_objects={"ConstantLayer": ConstantLayer}, safe_mode=False)
             if len(test_labels) == 0:
                 raise RuntimeError('train_split too large: test split has no members.')
             predictions = keras_model.predict(test)
@@ -241,31 +263,38 @@ def generate_correlations(dataset, models, step, settings):
             # Load model pickle file
             model = pickle.load(open(model, 'rb'))
 
+            if settings.model_architecture == 'avgfp' and len(settings.wt_seq) == 227:  # kludge to fix an avgfp-specific issue, remove in the future
+                offset = 1
+            else:
+                offset = 0
+
             # Convert mutated sequence to :-separated one-letter-code index one-letter-code format (e.g., D224G:S40G)
             mutants = []
             for seq in dataset_dict['examples']:
                 this_muts = []
                 mutseq = decode(seq)
                 assert len(mutseq) == len(settings.wt_seq)
-                for ii in range(len(mutseq) - 1):   # todo: - 1 is a kludge to fix an avgfp-specific issue, remove in the future
+                for ii in range(len(mutseq) - offset):
                     if not mutseq[ii] == settings.wt_seq[ii]:
                         this_muts.append(settings.wt_seq[ii] + str(ii + 1) + mutseq[ii])
                 mutants.append(':'.join(this_muts))
 
             # Compute scores
+            logits = model['logits']
+            vocab = model['vocab']
             predictions = []
             for mutant in mutants:
                 mutant_score = 0
                 for sub_mutant in mutant.split(":"):
                     wt, idx, mt = sub_mutant[0], int(sub_mutant[1:-1]) - 1, sub_mutant[-1]
-                    pred = model['logits'][idx, model['vocab'][mt]] - model['logits'][idx, model['vocab'][wt]]
+                    pred = logits[0, idx, vocab[mt]] - logits[0, idx, vocab[wt]]
                     mutant_score += pred.item()
                 predictions.append(mutant_score)
 
             # Compute correlations
             this_r = linregress(filter_data(predictions, dataset_labels[:, 0]))
         else:
-            keras_model = keras.saving.load_model(model, custom_objects={"ConstantLayer": ConstantLayer})
+            keras_model = keras.saving.load_model(model, custom_objects={"ConstantLayer": ConstantLayer}, safe_mode=False)
             predictions = keras_model.predict(train)
             this_r = linregress(filter_data(predictions[:, 0], dataset_labels[:, 0]))
 

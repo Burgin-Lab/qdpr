@@ -312,32 +312,85 @@ def create_model(pre_models, settings):
                               0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
                               0.00000000e+00, 1.00000000e+00]])
 
-    if settings.model_architecture == 'multibackbone_dynamic_embedding':
-        name = 0
+    if settings.prosst:
+        prosst_model = pickle.load(open(settings.path_to_prosst_model,'rb'))
+        ones = ['R', 'H', 'K', 'D', 'E', 'S', 'T', 'N', 'Q', 'C', 'G', 'P', 'A', 'V', 'I', 'L', 'M', 'F', 'Y', 'W'] # order of AAs in embedding
+        # Get an 20xN matrix of residue probabilities for each of the N positions from the ProSST model
+        prosst_embeddings_np = np.array([[prosst_model['logits'].squeeze().detach().numpy()[:, list(prosst_model['vocab'].keys()).index(one)]][0] for one in ones])
+
+        @tf.keras.utils.register_keras_serializable(package="MyLayers")
+        class ProSSTEmbedding(tf.keras.layers.Layer):
+            def __init__(self, prosst_matrix, **kwargs):
+                """
+                prosst_matrix: numpy array of shape (20, N_positions)
+                kwargs: anything else you’d pass to Layer (name, dtype, etc.)
+                """
+                super().__init__(**kwargs)
+                # store for config serialization
+                self.prosst_matrix = np.array(prosst_matrix, dtype=np.float32)
+
+            def build(self, input_shape):
+                # prosst_matrix has shape (20, N); we want a constant of shape (N,20)
+                table = self.prosst_matrix.T  # now shape=(N,20)
+                # make it a NON-TRAINABLE weight so that save()/load_model() will round-trip it
+                self.prosst_const = self.add_weight(
+                    name="prosst_table",
+                    shape=table.shape,
+                    dtype=self.dtype,
+                    trainable=False,
+                    initializer=tf.keras.initializers.Constant(table)
+                )
+                super().build(input_shape)
+
+            def call(self, static_embedding):
+                # static_embedding: (batch, N, 39)
+                # slice off the last-20 columns to get (batch,N,20)
+                x = static_embedding[:, :, 19:39]  # -> (batch,N,20)
+                # multiply by your prosst table (broadcast N×20 over the batch)
+                y = x * self.prosst_const[None, :, :]  # -> (batch, N, 20)
+                # sum out the last axis and keep dims -> (batch, N, 1)
+                return tf.reduce_sum(y, axis=2, keepdims=True)
+
+            def get_config(self):
+                cfg = super().get_config()
+                # store the raw array so that from_config can rebuild
+                cfg["prosst_matrix"] = self.prosst_matrix.tolist()
+                return cfg
+
+            @classmethod
+            def from_config(cls, config):
+                # pull out the list, turn back into np.array
+                prosst_matrix = np.array(config.pop("prosst_matrix"), dtype=np.float32)
+                return cls(prosst_matrix=prosst_matrix, **config)
+
+        # Get embedding layer from aaindex1_pca; this includes a one-hot embedding in the last 20 positions
         input = tf.keras.layers.Input(shape=(len(settings.wt_seq)))
-        embedding_models = []
-        for bb_type in ['ks', 'wn', 'sr', 'rmsf']:  # todo: make this dynamic
-            byres_pre_models = [keras.saving.load_model(model) for model in
-                                sorted(pre_models, key=lambda x: int(os.path.basename(x).replace('.keras', '').split('_')[-1]))
-                                if bb_type in model]
+        static_embedding = tf.keras.layers.Embedding(20, 39, weights=[aaindex1_pca.transpose()], trainable=False,
+                                                     input_length=len(settings.wt_seq))(input)
+        prosst_embeddings = ProSSTEmbedding(prosst_embeddings_np)(static_embedding)
 
-            for model in byres_pre_models:
-                model._name = model.name + '_' + str(name)
-                name += 1
-                for layer in model.layers:
-                    layer._name = layer.name + str(name)
-                    layer.trainable = False
-                    name += 1
+        # Put it together in a concatenate layer, for use as embeddings
+        embeddings = tf.keras.layers.Concatenate()([static_embedding, prosst_embeddings])
+    else:   # static embeddings
+        input = tf.keras.layers.Input(shape=(len(settings.wt_seq)))
+        embeddings = tf.keras.layers.Embedding(20, 39, weights=[aaindex1_pca.transpose()], trainable=False,
+                                                     input_length=len(settings.wt_seq))(input)
 
-            embedding_models.append(tf.keras.layers.Concatenate()([pre_model(input) for pre_model in byres_pre_models]))
-
-        embedding_models = tf.keras.layers.Concatenate()(embedding_models)
-        embedding_models = tf.reshape(embedding_models, [-1, len(settings.wt_seq), 4])  # todo: update 4 to reflect dynamic length of bb_types
-
-        static_embedding = tf.keras.layers.Embedding(20, 39, weights=[aaindex1_pca.transpose()], trainable=False, input_length=len(settings.wt_seq))(input)
-        dynamic_embedding = tf.keras.layers.Concatenate(-1)([static_embedding, embedding_models])
-
-        exp_backbone = tf.keras.Sequential([
+    # Select head architecture here. Taken from Gelman et al. PNAS 2021. Add new options if desired.
+    if settings.model_architecture == 'avgfp':
+        sequential = tf.keras.Sequential([
+            tf.keras.layers.Conv1D(128, 3, 1, activation=tf.keras.layers.LeakyReLU()),
+            tf.keras.layers.Conv1D(128, 3, 1, activation=tf.keras.layers.LeakyReLU()),
+            tf.keras.layers.Conv1D(128, 3, 1, activation=tf.keras.layers.LeakyReLU()),
+            tf.keras.layers.Conv1D(128, 3, 1, activation=tf.keras.layers.LeakyReLU()),
+            tf.keras.layers.Conv1D(128, 3, 1, activation=tf.keras.layers.LeakyReLU()),
+            tf.keras.layers.Flatten(),
+            tf.keras.layers.Dense(100, activation=tf.keras.layers.LeakyReLU()),
+            tf.keras.layers.Dropout(0.2),
+            tf.keras.layers.Dense(1, activation='linear')
+        ])(embeddings)
+    elif settings.model_architecture == 'gb1':
+        sequential = tf.keras.Sequential([
             tf.keras.layers.Conv1D(128, 17, 1, activation=tf.keras.layers.LeakyReLU()),
             tf.keras.layers.Conv1D(128, 17, 1, activation=tf.keras.layers.LeakyReLU()),
             tf.keras.layers.Conv1D(128, 17, 1, activation=tf.keras.layers.LeakyReLU()),
@@ -345,190 +398,13 @@ def create_model(pre_models, settings):
             tf.keras.layers.Dense(100, activation=tf.keras.layers.LeakyReLU()),
             tf.keras.layers.Dropout(0.2),
             tf.keras.layers.Dense(1, activation='linear')
-        ])(dynamic_embedding)
+        ])(embeddings)
 
-        backbones = [keras.saving.load_model(model) for model in sorted(pre_models,
-                         key=lambda x: int(os.path.basename(x).replace('.keras','').split('_')[-1]))
-                         if 'pca' in model]     # todo: make this dynamic
 
-        for model in backbones:
-            model._name = model.name + '_' + str(name)
-            name += 1
-            for layer in model.layers:
-                layer._name = layer.name + str(name)
-                layer.trainable = False
-                name += 1
-
-        backbones = tf.keras.layers.Concatenate()([backbone(input) for backbone in backbones])
-
-        c = tf.keras.layers.Concatenate()([exp_backbone, backbones])
-        c = tf.keras.layers.Dense(100, activation=tf.keras.layers.LeakyReLU())(c)
-        c = tf.keras.layers.Dropout(0.2)(c)
-        c = tf.keras.layers.Dense(1, activation='linear')(c)
-
-        model = tf.keras.Model(inputs=input, outputs=c)
-    elif settings.model_architecture == 'avgfp_multibackbone_dynamic_embedding':
-        name = 0
-        input = tf.keras.layers.Input(shape=(len(settings.wt_seq)))
-        embedding_models = []
-        for bb_type in ['ks', 'wn', 'rmsf']:  # todo: make this dynamic
-            byres_pre_models = [keras.saving.load_model(model) for model in
-                                sorted(pre_models, key=lambda x: int(os.path.basename(x).replace('.keras', '').split('_')[-1]))
-                                if bb_type in model]
-
-            for model in byres_pre_models:
-                model._name = model.name + '_' + str(name)
-                name += 1
-                for layer in model.layers:
-                    layer._name = layer.name + str(name)
-                    layer.trainable = False
-                    name += 1
-
-            if bb_type == 'wn':     # kludge for missing wn value for chromophore
-                class ConstantLayer(tf.keras.layers.Layer):
-                    def __init__(self, units=32):
-                        super().__init__()
-                        self.units = units
-
-                    # Create the state of the layer (weights)
-                    def build(self, input_shape):
-                        self.kernel = self.add_weight(
-                            shape=(input_shape[-1], self.units),
-                            initializer="glorot_uniform",
-                            trainable=True,
-                            name="kernel",
-                        )
-                        self.bias = self.add_weight(
-                            shape=(self.units,),
-                            initializer="zeros",
-                            trainable=True,
-                            name="bias",
-                        )
-
-                    # Defines the computation
-                    def call(self, inputs):
-                        output_shape = tf.shape(inputs)[0]
-                        return tf.zeros((output_shape, 1), dtype=inputs.dtype)
-                #byres_pre_models = byres_pre_models[:62] + [tf.keras.layers.Lambda(lambda x: x[:,0])] + byres_pre_models[62:]   # todo: for some reason lambda is returning (None,) and I need (None, 1)
-                byres_pre_models = byres_pre_models[:62] + [ConstantLayer()] + byres_pre_models[62:]
-
-            embedding_models.append(tf.keras.layers.Concatenate()([pre_model(input) for pre_model in byres_pre_models]))
-
-        embedding_models = tf.keras.layers.Concatenate()(embedding_models)
-        embedding_models = tf.reshape(embedding_models, [-1, len(settings.wt_seq), 3])  # todo: update 3 to reflect dynamic length of bb_types
-
-        static_embedding = tf.keras.layers.Embedding(20, 39, weights=[aaindex1_pca.transpose()], trainable=False, input_length=len(settings.wt_seq))(input)
-        dynamic_embedding = tf.keras.layers.Concatenate(-1)([static_embedding, embedding_models])
-
-        exp_backbone = tf.keras.Sequential([
-                tf.keras.layers.Conv1D(128, 3, 1, activation=tf.keras.layers.LeakyReLU()),
-                tf.keras.layers.Conv1D(128, 3, 1, activation=tf.keras.layers.LeakyReLU()),
-                tf.keras.layers.Conv1D(128, 3, 1, activation=tf.keras.layers.LeakyReLU()),
-                tf.keras.layers.Conv1D(128, 3, 1, activation=tf.keras.layers.LeakyReLU()),
-                tf.keras.layers.Conv1D(128, 3, 1, activation=tf.keras.layers.LeakyReLU()),
-                tf.keras.layers.Flatten(),
-                tf.keras.layers.Dense(100, activation=tf.keras.layers.LeakyReLU()),
-                tf.keras.layers.Dropout(0.2),
-                tf.keras.layers.Dense(1, activation='linear')
-            ])(dynamic_embedding)
-
-        backbones = [keras.saving.load_model(model) for model in sorted(pre_models,
-                         key=lambda x: int(os.path.basename(x).replace('.keras','').split('_')[-1]))
-                         if 'pca' in model]     # todo: make this dynamic
-
-        for model in backbones:
-            model._name = model.name + '_' + str(name)
-            name += 1
-            for layer in model.layers:
-                layer._name = layer.name + str(name)
-                layer.trainable = False
-                name += 1
-
-        backbones = tf.keras.layers.Concatenate()([backbone(input) for backbone in backbones])
-
-        c = tf.keras.layers.Concatenate()([exp_backbone, backbones])
-        c = tf.keras.layers.Dense(100, activation=tf.keras.layers.LeakyReLU())(c)
-        c = tf.keras.layers.Dropout(0.2)(c)
-        c = tf.keras.layers.Dense(1, activation='linear')(c)
-
-        model = tf.keras.Model(inputs=input, outputs=c)
-    elif settings.model_architecture == 'avgfp':
-        if not settings.transfer_weights:
-            model = tf.keras.Sequential([
-                tf.keras.layers.Embedding(20, 39, weights=[aaindex1_pca.transpose()], trainable=False, input_length=len(settings.wt_seq)),
-                tf.keras.layers.Conv1D(128, 3, 1, activation=tf.keras.layers.LeakyReLU(), trainable=(not settings.transfer_weights)),
-                tf.keras.layers.Conv1D(128, 3, 1, activation=tf.keras.layers.LeakyReLU(), trainable=(not settings.transfer_weights)),
-                tf.keras.layers.Conv1D(128, 3, 1, activation=tf.keras.layers.LeakyReLU(), trainable=(not settings.transfer_weights)),
-                tf.keras.layers.Conv1D(128, 3, 1, activation=tf.keras.layers.LeakyReLU(), trainable=(not settings.transfer_weights)),
-                tf.keras.layers.Conv1D(128, 3, 1, activation=tf.keras.layers.LeakyReLU(), trainable=(not settings.transfer_weights)),
-                tf.keras.layers.Flatten(),
-                tf.keras.layers.Dense(100, activation=tf.keras.layers.LeakyReLU()),
-                tf.keras.layers.Dropout(0.2),
-                tf.keras.layers.Dense(1, activation='linear')
-            ])
-        else:
-            model = tf.keras.Sequential([
-                tf.keras.layers.Embedding(20, 39, weights=[aaindex1_pca.transpose()], trainable=False, input_length=len(settings.wt_seq)),
-                tf.keras.layers.Conv1D(128, 3, 1, activation=tf.keras.layers.LeakyReLU(), trainable=False),
-                tf.keras.layers.Conv1D(128, 3, 1, activation=tf.keras.layers.LeakyReLU(), trainable=False),
-                tf.keras.layers.Conv1D(128, 3, 1, activation=tf.keras.layers.LeakyReLU(), trainable=False),
-                tf.keras.layers.Conv1D(128, 3, 1, activation=tf.keras.layers.LeakyReLU(), trainable=False),
-                tf.keras.layers.Conv1D(128, 3, 1, activation=tf.keras.layers.LeakyReLU(), trainable=False),
-                tf.keras.layers.Flatten(),
-                tf.keras.layers.Dense(256, activation=tf.keras.layers.LeakyReLU(), trainable=True),
-                tf.keras.layers.Dropout(0.2),
-                tf.keras.layers.Dense(228, activation='linear')
-            ])
-
-            model.load_weights(settings.transfer_weights)
-            model.pop()
-            model.pop()
-            model.pop()
-            model.add(tf.keras.layers.Dense(100, activation='linear'))
-            model.add(tf.keras.layers.Dropout(0.2))
-            model.add(tf.keras.layers.Dense(1, activation='linear'))
-    elif settings.model_architecture == 'gb1':
-        if not settings.transfer_weights:
-            model = tf.keras.Sequential([
-                tf.keras.layers.Embedding(20, 39, weights=[aaindex1_pca.transpose()], trainable=False, input_length=len(settings.wt_seq)),
-                tf.keras.layers.Conv1D(128, 17, 1, activation=tf.keras.layers.LeakyReLU()),
-                tf.keras.layers.Conv1D(128, 17, 1, activation=tf.keras.layers.LeakyReLU()),
-                tf.keras.layers.Conv1D(128, 17, 1, activation=tf.keras.layers.LeakyReLU()),
-                tf.keras.layers.Flatten(),
-                tf.keras.layers.Dense(100, activation=tf.keras.layers.LeakyReLU()),
-                tf.keras.layers.Dropout(0.2),
-                tf.keras.layers.Dense(1, activation='linear')
-            ])
-        else:
-            model = tf.keras.Sequential([
-                tf.keras.layers.Embedding(20, 39, weights=[aaindex1_pca.transpose()], trainable=False, input_length=len(settings.wt_seq)),
-                tf.keras.layers.Conv1D(128, 17, 1, activation=tf.keras.layers.LeakyReLU(), trainable=False),
-                tf.keras.layers.Conv1D(128, 17, 1, activation=tf.keras.layers.LeakyReLU(), trainable=False),
-                tf.keras.layers.Conv1D(128, 17, 1, activation=tf.keras.layers.LeakyReLU(), trainable=False),
-                tf.keras.layers.Flatten(),
-                tf.keras.layers.Dense(128, activation=tf.keras.layers.LeakyReLU()),
-                tf.keras.layers.Dropout(0.3),
-                tf.keras.layers.Dense(128, activation=tf.keras.layers.LeakyReLU()),
-                tf.keras.layers.Dropout(0.1),
-                tf.keras.layers.Dense(56, activation='linear')
-            ])
-
-            model.load_weights(settings.transfer_weights)
-            model.pop()
-            model.pop()
-            model.pop()
-            model.pop()
-            model.pop()
-            model.add(tf.keras.layers.Dense(100, activation='linear'))
-            model.add(tf.keras.layers.Dropout(0.2))
-            model.add(tf.keras.layers.Dense(1, activation='linear'))
-    else:
-        raise RuntimeError('Unrecognized model_architecture: ' + settings.model_architecture)
-
+    model = tf.keras.Model(inputs=input, outputs=sequential)
     model.summary()
 
     return model
-
 
 def train(dataset, step, pre_models, settings):
     training_index = 0
@@ -538,9 +414,6 @@ def train(dataset, step, pre_models, settings):
         BATCH_SIZE = settings.batch_size
 
         model = create_model(pre_models, settings)
-
-        #if settings.transfer_weights:
-        #    model.load_weights(settings.transfer_weights)
 
         SHUFFLE_BUFFER_SIZE = 100
         train_dataset = train_dataset.shuffle(SHUFFLE_BUFFER_SIZE).batch(BATCH_SIZE)
