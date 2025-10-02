@@ -205,6 +205,8 @@ def from_file(models, correlations, seqfile, step, settings):
             for mutant in mutants:
                 mutant_score = 0
                 for sub_mutant in mutant.split(":"):
+                    if sub_mutant == '':
+                        continue
                     wt, idx, mt = sub_mutant[0], int(sub_mutant[1:-1]) - 1, sub_mutant[-1]
                     pred = logits[0, idx, vocab[mt]] - logits[0, idx, vocab[wt]]
                     mutant_score += pred.item()

@@ -1,0 +1,6 @@
+pydantic
+numpy>=2.0
+pickle
+tensorflow==2.13.1
+scipy
+statsmodels
